@@ -20,8 +20,9 @@ struct ServerConfig {
 };
 
 std::map<int, std::string> client_names; // Mapeo de socket a nombre de cliente
-ServerConfig server_config; 
+ServerConfig server_config;
 int servidorRedNeuronal = 0; // Variable para contar los usuarios conectados
+int client_counter = 1; // Contador de clientes para asignar nombres numéricos
 
 std::map<std::string, int> client_list;
 
@@ -36,6 +37,11 @@ void marcarElegido(ServerConfig& config) {
         } else {
             config.elegido[i] = false;
         }
+    }
+}
+void send_to_all_clients(const std::string& message) {
+    for (const auto& pair : client_list) {
+        send(pair.second, message.c_str(), message.size(), 0);
     }
 }
 
@@ -61,25 +67,24 @@ void send_vectorB(int client_socket, const std::string& identifier, const std::v
     }
     send(client_socket, message.c_str(), message.size(), 0);
 }
-void handle_client(int client_socket) {
-    char command;
-    char message[BUFFER_SIZE];
-    int bytes_received;
+void manejar_cliente(int socket_cliente, sockaddr_in direccion_cliente) {
+    char buffer[BUFFER_SIZE];
+    int bytes_recibidos;
 
-    // Leer nombre de cliente
-    std::string client_name;
-    if ((bytes_received = read(client_socket, message, BUFFER_SIZE - 1)) > 0) {
-        message[bytes_received] = '\0';
-        client_name = message;
-        client_names[client_socket] = client_name;
-        std::cout << "Cliente conectado: " << client_name << std::endl;
-        server_config.nombres.push_back(client_name); // Agregar nombre del cliente a la estructura
-        server_config.ips.push_back(client_socket); // Agregar socket del cliente a la estructura
-        server_config.elegido.push_back(false); // Inicializar como no elegido
-        servidorRedNeuronal++; // Incrementar contador de usuarios conectados
-    }
+    // Asignar nombre automático al cliente
+    std::string nombre_cliente = std::to_string(client_counter++);
+    client_names[socket_cliente] = nombre_cliente;
+    server_config.nombres.push_back(nombre_cliente);
+    server_config.ips.push_back(ntohs(direccion_cliente.sin_port)); // Guardar el puerto del cliente en orden de llegada
+    server_config.elegido.push_back(false); // Por defecto, nadie está elegido
+    client_list[nombre_cliente] = socket_cliente;
 
-    // Verificar si se alcanzó el límite de usuarios
+    // Enviar el nombre asignado al cliente
+    send(socket_cliente, nombre_cliente.c_str(), nombre_cliente.length(), 0);
+
+    std::cout << "Cliente " << nombre_cliente << " se ha conectado desde el puerto " << ntohs(direccion_cliente.sin_port) << std::endl;
+
+    servidorRedNeuronal++;
     if (servidorRedNeuronal == 4) {
         // Seleccionar aleatoriamente un cliente y marcarlo como elegido
         marcarElegido(server_config);
@@ -93,131 +98,112 @@ void handle_client(int client_socket) {
             send_vectorB(pair.first, "E", server_config.elegido);
         }
     }
+    while (true) {
+        if ((bytes_recibidos = recv(socket_cliente, buffer, BUFFER_SIZE, 0)) <= 0) {
+            std::cerr << "Error al recibir datos del cliente o conexión cerrada" << std::endl;
+            close(socket_cliente);
+            break;
+        }
 
-    while ((bytes_received = read(client_socket, &command, sizeof(command))) > 0) {
-        switch (command) {
-            case 'X':
-                // El cliente solicita cerrar la conexión
-                std::cout << "Cliente desconectado: " << client_name << std::endl;
-                // Eliminar cliente de la lista
-                client_list.erase(client_name);
-                // Cerrar conexión
-                close(client_socket);
-                return;
-            case 'L':
-                // Enviar lista de usuarios conectados
-                {
-                    std::string lista_usuarios = "Usuarios conectados:\n";
-                    for (const auto& pair : client_list) {
-                        lista_usuarios += pair.first + "\n";
-                    }
-                    std::cout << lista_usuarios; // Imprimir en el servidor
-                    send(client_socket, lista_usuarios.c_str(), lista_usuarios.length(), 0); // Enviar al cliente
-                    break;
+        buffer[bytes_recibidos] = '\0';
+        char comando = buffer[0];
+        
+        switch (comando) {
+            case 'L': {
+                // Enviar la lista de clientes conectados
+                std::string lista = "Clientes conectados:\n";
+                for (const auto& nombre : server_config.nombres) {
+                    lista += nombre + "\n";
                 }
-            case 'B':
-                if ((bytes_received = read(client_socket, message, BUFFER_SIZE - 1)) > 0) {
-                    message[bytes_received] = '\0';
-
-                    std::cout << "Mensaje broadcast de " << client_name << ": " << message << std::endl;
-                    // Broadcast the message to all clients
-                    for (auto& pair : client_list) {
-                        send(pair.second, message, strlen(message), 0);
-                    }
-                }
+                send(socket_cliente, lista.c_str(), lista.size(), 0);
                 break;
-            case 'M': {
-                // Obtener el nombre del remitente
-                std::string remitente = client_name;
-
-                // Leer el nombre del destinatario
-                std::string destinatario;
-                bytes_received = read(client_socket, message, BUFFER_SIZE - 1);
-                if (bytes_received > 0) {
-                    message[bytes_received] = '\0';
-                    destinatario = message;
-                } else {
-                    std::cerr << "Error al leer el nombre del destinatario" << std::endl;
-                    break;
-                }
-
-                // Leer el mensaje
-                std::string mensaje;
-                bytes_received = read(client_socket, message, BUFFER_SIZE - 1);
-                if (bytes_received > 0) {
-                    message[bytes_received] = '\0';
-                    mensaje = message;
-                } else {
-                    std::cerr << "Error al leer el mensaje" << std::endl;
-                    break;
-                }
-
-                // Imprimir el remitente, el destinatario y el mensaje
-                std::cout << "Remitente: " << remitente << std::endl;
-                std::cout << "Destinatario: " << destinatario << std::endl;
-                std::cout << "Mensaje: " << mensaje << std::endl;
-
-                // Buscar el destinatario en la lista de clientes
-                auto it = client_list.find(destinatario);
-                if (it != client_list.end()) {
-                    // Enviar el mensaje al destinatario
-                    std::string mensaje_completo = remitente + ": " + mensaje;
-                    send(it->second, mensaje_completo.c_str(), mensaje_completo.length(), 0);
-                } else {
-                    // Destinatario no encontrado
-                    std::string error_msg = "¡El destinatario no existe!";
-                    send(client_socket, error_msg.c_str(), error_msg.length(), 0);
+            }
+            case 'B': {
+                // Enviar mensaje broadcast a todos los clientes
+                std::string mensaje = std::string(buffer + 1);
+                std::cout << "Mensaje de broadcast recibido: " << mensaje << std::endl;
+                for (const auto& [socket, nombre] : client_names) {
+                    send(socket, mensaje.c_str(), mensaje.size(), 0);
                 }
                 break;
             }
+            case 'M': {
+                // Enviar mensaje privado
+                std::string destinatario(buffer + 1);
+                std::string mensaje;
+                if ((bytes_recibidos = recv(socket_cliente, buffer, BUFFER_SIZE, 0)) > 0) {
+                    buffer[bytes_recibidos] = '\0';
+                    mensaje = std::string(buffer);
+                }
+
+                if (client_list.find(destinatario) != client_list.end()) {
+                    int socket_destinatario = client_list[destinatario];
+                    send(socket_destinatario, mensaje.c_str(), mensaje.size(), 0);
+                } else {
+                    std::string error_msg = "El cliente no está conectado.\n";
+                    send(socket_cliente, error_msg.c_str(), error_msg.size(), 0);
+                }
+                break;
+            }
+            case 'X': {
+                std::string nombre_cliente = client_names[socket_cliente];
+                std::cout << nombre_cliente << " se ha desconectado." << std::endl;
+                client_names.erase(socket_cliente);
+                close(socket_cliente);
+                return;
+            }
             default:
-                std::cout << "Comando inválido" << std::endl;
+                std::cerr << "Comando no reconocido: " << comando << std::endl;
                 break;
         }
     }
 }
 
 int main() {
-    int server_socket, client_socket;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t client_len = sizeof(client_addr);
+    int socket_servidor, socket_cliente;
+    struct sockaddr_in direccion_servidor, direccion_cliente;
+    socklen_t len_direccion = sizeof(direccion_cliente);
 
-    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        std::cerr << "Falló la creación del socket" << std::endl;
+    // Crear socket
+    if ((socket_servidor = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        std::cerr << "Error al crear el socket" << std::endl;
         return -1;
     }
 
-    int opt = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-        std::cerr << "Falló la configuración del socket" << std::endl;
+    // Configurar dirección del servidor
+    direccion_servidor.sin_family = AF_INET;
+    direccion_servidor.sin_addr.s_addr = INADDR_ANY;
+    direccion_servidor.sin_port = htons(PORT);
+
+    // Enlazar el socket a la dirección y puerto
+    if (bind(socket_servidor, (struct sockaddr *)&direccion_servidor, sizeof(direccion_servidor)) < 0) {
+        std::cerr << "Error al enlazar el socket" << std::endl;
+        close(socket_servidor);
         return -1;
     }
 
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
-    
-    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        std::cerr << "Falló el enlace del socket" << std::endl;
+    // Escuchar conexiones entrantes
+    if (listen(socket_servidor, 3) < 0) {
+        std::cerr << "Error al escuchar en el socket" << std::endl;
+        close(socket_servidor);
         return -1;
     }
 
-    if (listen(server_socket, 3) < 0) {
-        std::cerr << "Falló al intentar escuchar en el puerto" << std::endl;
-        return -1;
-    }
-
-    std::cout << "Esperando conexiones..." << std::endl;
+    std::cout << "Servidor escuchando en el puerto " << PORT << std::endl;
 
     while (true) {
-        if ((client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_len)) < 0) {
-            std::cerr << "Error en la aceptación de la conexión" << std::endl;
+        if ((socket_cliente = accept(socket_servidor, (struct sockaddr *)&direccion_cliente, &len_direccion)) < 0) {
+            std::cerr << "Error al aceptar la conexión" << std::endl;
+            close(socket_servidor);
             return -1;
         }
 
-        std::thread client_thread(handle_client, client_socket);
-        client_thread.detach();
+        std::cout << "Nueva conexión aceptada" << std::endl;
+
+        // Crear un hilo para manejar al cliente
+        std::thread(manejar_cliente, socket_cliente, direccion_cliente).detach();
     }
 
+    close(socket_servidor);
     return 0;
 }
