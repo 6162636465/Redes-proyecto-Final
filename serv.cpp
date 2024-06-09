@@ -1,71 +1,97 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <string>
 #include <cstring>
 #include <map>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <fstream>
+#include <random>
 
 constexpr int PORT = 8080;
 constexpr int BUFFER_SIZE = 150;
 
+struct ServerConfig {
+    std::vector<std::string> nombres;
+    std::vector<int> ips;
+    std::vector<bool> elegido;
+};
+
+std::map<int, std::string> client_names; // Mapeo de socket a nombre de cliente
+ServerConfig server_config; 
+int servidorRedNeuronal = 0; // Variable para contar los usuarios conectados
+
 std::map<std::string, int> client_list;
 
-// Función para jugar al tic tac toe
-bool play_tic_tac_toe(char board[3][3], char marca, int fila, int columna) {
-    if (fila < 0 || fila >= 3 || columna < 0 || columna >= 3 || board[fila][columna] != ' ') {
-        return false; // Posición inválida o ya ocupada
-    }
-
-    board[fila][columna] = marca;
-
-    // Verificar si hay un ganador en la fila
-    for (int i = 0; i < 3; ++i) {
-        if (board[fila][i] != marca) break;
-        if (i == 2) return true;
-    }
-
-    // Verificar si hay un ganador en la columna
-    for (int i = 0; i < 3; ++i) {
-        if (board[i][columna] != marca) break;
-        if (i == 2) return true;
-    }
-
-    // Verificar si hay un ganador en la diagonal principal
-    if (fila == columna) {
-        for (int i = 0; i < 3; ++i) {
-            if (board[i][i] != marca) break;
-            if (i == 2) return true;
+void marcarElegido(ServerConfig& config) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, config.nombres.size() - 1);
+    int index = dis(gen); // Índice aleatorio
+    for (size_t i = 0; i < config.elegido.size(); ++i) {
+        if (i == index) {
+            config.elegido[i] = true;
+        } else {
+            config.elegido[i] = false;
         }
     }
-
-    // Verificar si hay un ganador en la diagonal secundaria
-    if (fila + columna == 2) {
-        for (int i = 0; i < 3; ++i) {
-            if (board[i][2 - i] != marca) break;
-            if (i == 2) return true;
-        }
-    }
-
-    return false; // No hay ganador todavía
 }
 
+void send_names(int client_socket, const std::vector<std::string>& nombres) {
+    std::string message = "M";
+    for (const auto& nombre : nombres) {
+        message += nombre + ";";
+    }
+    send(client_socket, message.c_str(), message.size(), 0);
+}
+void send_vectorA(int client_socket, const std::string& identifier, const std::vector<int>& vector_data) {
+    std::string message = identifier;
+    for (const auto& item : vector_data) {
+        message += std::to_string(item) + ";";
+    }
+    send(client_socket, message.c_str(), message.size(), 0);
+}
+
+void send_vectorB(int client_socket, const std::string& identifier, const std::vector<bool>& vector_data) {
+    std::string message = identifier;
+    for (const auto& item : vector_data) {
+        message += (item ? "1" : "0") + std::string(";");
+    }
+    send(client_socket, message.c_str(), message.size(), 0);
+}
 void handle_client(int client_socket) {
     char command;
     char message[BUFFER_SIZE];
     int bytes_received;
 
+    // Leer nombre de cliente
     std::string client_name;
-
     if ((bytes_received = read(client_socket, message, BUFFER_SIZE - 1)) > 0) {
         message[bytes_received] = '\0';
         client_name = message;
-        client_list[client_name] = client_socket;
+        client_names[client_socket] = client_name;
         std::cout << "Cliente conectado: " << client_name << std::endl;
-        std::string welcome_msg = "¡Hola " + client_name + "! Bienvenido al servidor de chat.";
-        send(client_socket, welcome_msg.c_str(), welcome_msg.length(), 0);
+        server_config.nombres.push_back(client_name); // Agregar nombre del cliente a la estructura
+        server_config.ips.push_back(client_socket); // Agregar socket del cliente a la estructura
+        server_config.elegido.push_back(false); // Inicializar como no elegido
+        servidorRedNeuronal++; // Incrementar contador de usuarios conectados
+    }
+
+    // Verificar si se alcanzó el límite de usuarios
+    if (servidorRedNeuronal == 4) {
+        // Seleccionar aleatoriamente un cliente y marcarlo como elegido
+        marcarElegido(server_config);
+
+        // Enviar el vector de nombres a todos los clientes
+        for (const auto& pair : client_names) {
+            send_names(pair.first, server_config.nombres);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            send_vectorA(pair.first, "I", server_config.ips);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            send_vectorB(pair.first, "E", server_config.elegido);
+        }
     }
 
     while ((bytes_received = read(client_socket, &command, sizeof(command))) > 0) {
@@ -144,135 +170,6 @@ void handle_client(int client_socket) {
                 }
                 break;
             }
-
-            case 'G': {
-                // Leer la posición y el nombre del jugador
-                int position;
-                bytes_received = read(client_socket, &position, sizeof(position));
-                if (bytes_received != sizeof(position)) {
-                    std::cerr << "Error al leer la posición del tablero" << std::endl;
-                    break;
-                }
-
-                // Verificar si la posición es válida
-                if (position < 1 || position > 9) {
-                    std::string error_msg = "Posición inválida. Debe estar entre 1 y 9.";
-                    send(client_socket, error_msg.c_str(), error_msg.length(), 0);
-                    break;
-                }
-
-                // Leer el nombre del jugador
-                std::string player_name = client_name.substr(0, 1); // Primer caracter del nombre del jugador
-
-                // Actualizar el tablero del tic tac toe
-                static char board[3][3] = {{' ', ' ', ' '}, {' ', ' ', ' '}, {' ', ' ', ' '}};
-                int row = (position - 1) / 3;
-                int col = (position - 1) % 3;
-
-                if (play_tic_tac_toe(board, player_name[0], row, col)) {
-                    // Si hay un ganador, enviar mensaje de victoria
-                    std::string victory_msg = "¡" + player_name + " ha ganado!";
-                    send(client_socket, victory_msg.c_str(), victory_msg.length(), 0);
-                } else {
-                    // Si no hay ganador, enviar el estado actual del tablero
-                    std::string board_state = "Estado actual del tablero:\n";
-                    for (int i = 0; i < 3; ++i) {
-                        for (int j = 0; j < 3; ++j) {
-                            board_state += board[i][j];
-                        }
-                        board_state += '\n';
-                    }
-                    send(client_socket, board_state.c_str(), board_state.length(), 0);
-                }
-                break;
-            }
-
-            case 'I':{
-                // Leer tamaño del nombre del archivo
-                char filename_size_str[3];
-                read(client_socket, filename_size_str, 2);
-                filename_size_str[2] = '\0';
-                int filename_size = atoi(filename_size_str);
-
-                // Leer nombre del archivo
-                char filename[filename_size];
-                read(client_socket, filename, filename_size);
-
-                // Leer tamaño del archivo
-                char filesize_str[16];
-                read(client_socket, filesize_str, 15);
-                filesize_str[15] = '\0';
-                long int filesize = atol(filesize_str);
-
-                // Leer tamaño del nombre del destinatario
-                char reciever_size_str[3];
-                read(client_socket, reciever_size_str, 2);
-                reciever_size_str[2] = '\0';
-                int reciever_size = atoi(reciever_size_str);
-
-                // Leer nombre del destinatario
-                char reciever[reciever_size];
-                read(client_socket, reciever, reciever_size);
-
-                // Archivo de destino en el servidor
-                std::ofstream outfile(std::string(filename), std::ios::binary);
-
-                // Recibir el archivo
-                char buffer[BUFFER_SIZE];
-                int bytes_received;
-                while (filesize > 0) {
-                    bytes_received = read(client_socket, buffer, std::min(BUFFER_SIZE, (int)filesize));
-                    outfile.write(buffer, bytes_received);
-                    filesize -= bytes_received;
-                }
-                outfile.close();
-
-                // Notificar al cliente emisor
-                std::string confirmation_msg = "Archivo \"" + std::string(filename) + "\" enviado correctamente";
-                send(client_socket, confirmation_msg.c_str(), confirmation_msg.length(), 0);
-
-                // Enviar el archivo al destinatario si está conectado
-                auto it = client_list.find(std::string(reciever));
-                if (it != client_list.end()) {
-                    // Enviar comando 'I' al destinatario
-                    char i_command = 'I';
-                    send(it->second, &i_command, sizeof(i_command), 0);
-
-                    // Enviar tamaño del nombre del archivo al destinatario
-                    send(it->second, filename_size_str, 2, 0);
-
-                    // Enviar nombre del archivo al destinatario
-                    send(it->second, filename, filename_size, 0);
-
-                    // Enviar tamaño del archivo al destinatario
-                    send(it->second, filesize_str, 15, 0);
-
-                    // Enviar tamaño del nombre del destinatario al destinatario
-                    send(it->second, reciever_size_str, 2, 0);
-
-                    // Enviar nombre del destinatario al destinatario
-                    send(it->second, reciever, reciever_size, 0);
-
-                    // Enviar el archivo al destinatario
-                    std::ifstream infile(std::string(filename), std::ios::binary);
-                    while (infile) {
-                        infile.read(buffer, BUFFER_SIZE);
-                        int bytes_read = infile.gcount();
-                        send(it->second, buffer, bytes_read, 0);
-                    }
-                    infile.close();
-
-                    // Notificar al cliente destinatario
-                    std::string notification_msg = "Archivo \"" + std::string(filename) + "\" enviado a " + std::string(reciever);
-                    send(client_socket, notification_msg.c_str(), notification_msg.length(), 0);
-                } else {
-                    // Notificar al cliente emisor si el destinatario no está conectado
-                    std::string error_msg = "El destinatario \"" + std::string(reciever) + "\" no está conectado.";
-                    send(client_socket, error_msg.c_str(), error_msg.length(), 0);
-                }
-                break;
-            }
-
             default:
                 std::cout << "Comando inválido" << std::endl;
                 break;
