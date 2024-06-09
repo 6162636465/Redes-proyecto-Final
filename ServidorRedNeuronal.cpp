@@ -80,44 +80,50 @@ void recibir_mensajes(int socket) {
         }
     }
 }
+
 int main() {
     int socket_cliente;
     struct sockaddr_in direccion_servidor;
+    char buffer[BUFFER_SIZE];
 
     // Crear socket
-    if ((socket_cliente = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+    if ((socket_cliente = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         std::cerr << "Error al crear el socket" << std::endl;
         return -1;
     }
 
+    // Configurar dirección del servidor
     direccion_servidor.sin_family = AF_INET;
     direccion_servidor.sin_port = htons(PORT);
 
-    // Convertir direcciones IPv4 e IPv6 de texto a forma binaria
     if (inet_pton(AF_INET, "127.0.0.1", &direccion_servidor.sin_addr) <= 0) {
-        std::cerr << "Dirección inválida o no soportada" << std::endl;
+        std::cerr << "Dirección IP inválida o no soportada" << std::endl;
+        close(socket_cliente);
         return -1;
     }
 
     // Conectar al servidor
     if (connect(socket_cliente, (struct sockaddr *)&direccion_servidor, sizeof(direccion_servidor)) < 0) {
-        std::cerr << "Error al conectar con el servidor" << std::endl;
+        std::cerr << "Conexión fallida" << std::endl;
+        close(socket_cliente);
         return -1;
     }
 
-    std::cout << "Conectado al servidor" << std::endl;
+    // Recibir el nombre asignado del servidor
+    int bytes_recibidos = recv(socket_cliente, buffer, BUFFER_SIZE, 0);
+    if (bytes_recibidos > 0) {
+        buffer[bytes_recibidos] = '\0';
+        std::string nombre_asignado = buffer;
+        std::cout << "Conectado al servidor con el nombre: " << nombre_asignado << std::endl;
+    } else {
+        std::cerr << "Error al recibir el nombre asignado del servidor" << std::endl;
+        close(socket_cliente);
+        return -1;
+    }
 
-    // Enviar nombre de cliente al servidor
-    std::string nombre_cliente;
-    std::cout << "Ingrese su nombre: ";
-    std::getline(std::cin, nombre_cliente);
-    write(socket_cliente, nombre_cliente.c_str(), nombre_cliente.length()); // Enviar nombre de cliente al servidor
+    // Iniciar el hilo para recibir mensajes del servidor
+    std::thread hilo_receptor(recibir_mensajes, socket_cliente);
 
-    // Iniciar hilo para recibir mensajes del servidor
-    std::thread hilo_recepcion(recibir_mensajes, socket_cliente);
-    hilo_recepcion.detach();
-
-    // Enviar comandos o mensajes al servidor
     while (true) {
         char comando;
         char mensaje[150];
@@ -182,6 +188,25 @@ int main() {
                 }
                 break;
             }
+            case 'D': {
+                // Revisar la estructura local para encontrar un cliente elegido
+                bool cliente_encontrado = false;
+                for (size_t i = 0; i < client_config.elegido.size(); ++i) {
+                    if (client_config.elegido[i]) {
+                        // Enviar mensaje al cliente seleccionado
+                        std::string mensaje = "Hola master de media ojo";
+                        int socket_destinatario = client_config.ips[i]; // Obtener el socket del cliente seleccionado
+                        write(socket_cliente, mensaje.c_str(), mensaje.length());
+                        cliente_encontrado = true;
+                        break;
+                    }
+                }
+                if (!cliente_encontrado) {
+                    std::cout << "No se encontró ningún cliente elegido" << std::endl;
+                }
+                break;
+            }
+
             default:
                 std::cerr << "Comando no reconocido" << std::endl;
                 break;
