@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sstream>
+#include <chrono>
+#include <iomanip>
 
 struct ClientConfig {
     std::vector<std::string> nombres;
@@ -19,10 +21,12 @@ std::multimap<int, std::string> DataAprendisaje;
 ClientConfig client_config;
 std::vector<int> received_keys;
 std::vector<std::string> received_values;
+bool keep_alive_active = false;
 
 void handle_tcp_connection(int tcp_socket);
 void handle_udp_connection(int udp_socket, sockaddr_in udp_server_addr);
 void print_client_config();
+void send_keep_alive(int tcp_socket);
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -101,7 +105,11 @@ void handle_tcp_connection(int tcp_socket) {
                 case '2': {
                     client_config.ips.clear();
                     while (std::getline(ss, token, ',')) {
-                        client_config.ips.push_back(std::stoi(token));
+                        try {
+                            client_config.ips.push_back(std::stoi(token));
+                        } catch (const std::invalid_argument &e) {
+                            std::cerr << "Invalid IP token: " << token << std::endl;
+                        }
                     }
                     std::cout << "Updated IPs: ";
                     for (const auto& ip : client_config.ips) {
@@ -120,6 +128,13 @@ void handle_tcp_connection(int tcp_socket) {
                         std::cout << selected << " ";
                     }
                     std::cout << std::endl;
+                    break;
+                }
+                case 'H': {
+                    if (!keep_alive_active) {
+                        keep_alive_active = true;
+                        std::thread(send_keep_alive, tcp_socket).detach();
+                    }
                     break;
                 }
                 default:
@@ -141,47 +156,6 @@ void handle_udp_connection(int udp_socket, sockaddr_in udp_server_addr) {
             std::istringstream ss(message.substr(1));
             std::string token;
             switch (message[0]) {
-                case '1': {
-                    client_config.nombres.clear();
-                    while (std::getline(ss, token, ',')) {
-                        client_config.nombres.push_back(token);
-                    }
-                    std::cout << "Updated names: ";
-                    for (const auto& name : client_config.nombres) {
-                        std::cout << name << " ";
-                    }
-                    std::cout << std::endl;
-                    break;
-                }
-                case '2': {
-                    client_config.ips.clear();
-                    while (std::getline(ss, token, ',')) {
-                        client_config.ips.push_back(std::stoi(token));
-                    }
-                    std::cout << "Updated IPs: ";
-                    for (const auto& ip : client_config.ips) {
-                        std::cout << ip << " ";
-                    }
-                    std::cout << std::endl;
-                    break;
-                }
-                case '3': {
-                    client_config.elegido.clear();
-                    while (std::getline(ss, token, ',')) {
-                        client_config.elegido.push_back(token == "1");
-                    }
-                    std::cout << "Updated selected: ";
-                    for (const auto& selected : client_config.elegido) {
-                        std::cout << selected << " ";
-                    }
-                    std::cout << std::endl;
-                    break;
-                }
-                case 'C': {
-                    std::cout << "ClientConfig structure:" << std::endl;
-                    print_client_config();
-                    break;
-                }
                 case 'K': {
                     received_keys.clear();
                     while (std::getline(ss, token, ',')) {
@@ -226,6 +200,23 @@ void handle_udp_connection(int udp_socket, sockaddr_in udp_server_addr) {
                     break;
             }
         }
+    }
+}
+
+void send_keep_alive(int tcp_socket) {
+    while (true) {
+        auto now = std::chrono::system_clock::now();
+        std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+        std::tm* now_tm = std::localtime(&now_c);
+        
+        std::stringstream ss;
+        ss << "H:" << std::setw(2) << std::setfill('0') << now_tm->tm_hour << ":"
+           << std::setw(2) << std::setfill('0') << now_tm->tm_min;
+        
+        std::string time_message = ss.str();
+        send(tcp_socket, time_message.c_str(), time_message.size(), 0);
+        std::cout << "Sent keep-alive message: " << time_message << std::endl; // Imprimir el mensaje enviado
+        std::this_thread::sleep_for(std::chrono::minutes(1));
     }
 }
 
