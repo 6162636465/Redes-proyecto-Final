@@ -12,10 +12,11 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <algorithm>
+#include <chrono>
 
 struct ServerConfig {
-    std::vector<std::string> nombres;
-    std::vector<int> ips;
+    std::vector<int> nombres;  // client_id
+    std::vector<int> ips;  // client_socket
     std::vector<bool> elegido;
 };
 
@@ -24,14 +25,21 @@ std::map<std::string, sockaddr_in> client_udp_sockets;
 std::multimap<int, std::string> DataAprendisaje;
 ServerConfig server_config;
 std::mutex config_mutex;
+std::mutex message_count_mutex;
+bool keep_alive_active = false;
+bool first_message_received = false;
+int message_count = 0;
+int cantidad_max_Usuarios = 4;
 
 void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket);
 void handle_udp_connection(int udp_socket);
 void udp_send_function(int udp_socket, const std::string &message, const sockaddr_in *client_addr = nullptr);
-void update_selected_client(int udp_socket);
+void tcp_broadcast_function(const std::string &message);
+void update_selected_client();
 void load_data_aprendisaje(const std::string &filename);
 void print_data_aprendisaje();
 void distribute_data_to_clients(int udp_socket);
+void keep_alive_monitor();
 
 int main() {
     load_data_aprendisaje("data.csv");
@@ -57,6 +65,10 @@ int main() {
 
     std::thread udp_thread(handle_udp_connection, udp_socket);
     udp_thread.detach();
+
+    // Crear y manejar el hilo de keep-alive monitor en el main
+    std::thread keep_alive_thread(keep_alive_monitor);
+    keep_alive_thread.detach();
 
     while (true) {
         sockaddr_in client_addr;
@@ -86,14 +98,28 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
             switch (message[0]) {
                 case '1': {
                     int client_id = server_config.nombres.size() + 1;
-                    server_config.nombres.push_back(client_ip);
-                    server_config.ips.push_back(client_id);
+                    server_config.nombres.push_back(client_id);
+                    server_config.ips.push_back(client_socket);
                     server_config.elegido.push_back(false);
                     terminal_sockets[client_ip] = client_socket;
-                    std::cout << "TCP client connected: " << client_ip << std::endl;
-                    if (server_config.nombres.size() == 4) {
-                        update_selected_client(udp_socket);
+                    std::cout << "TCP client connected: " << client_ip << " with ID " << client_id << std::endl;
+                    if (server_config.nombres.size() == cantidad_max_Usuarios) {
+                        update_selected_client();
+                        keep_alive_active = true;
+                        // Esperar 1 segundo antes de enviar el comando 'H'
+                        std::this_thread::sleep_for(std::chrono::seconds(1));
+                        // Enviar comando 'H' a todos los clientes TCP para activar el keep-alive
+                        for (int socket : server_config.ips) {
+                            std::string keep_alive_command = "H";
+                            send(socket, keep_alive_command.c_str(), keep_alive_command.size(), 0);
+                        }
                     }
+                    break;
+                }
+                case 'H': {
+                    std::lock_guard<std::mutex> count_lock(message_count_mutex);
+                    message_count++;
+                    first_message_received = true;
                     break;
                 }
                 case 'A': {
@@ -104,7 +130,7 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                 }
                 case 'B': {
                     for (size_t i = 0; i < server_config.nombres.size(); ++i) {
-                        std::cout << "Client " << server_config.nombres[i] << " - IP: " << server_config.ips[i] << " - Elegido: " << server_config.elegido[i] << std::endl;
+                        std::cout << "Client ID " << server_config.nombres[i] << " - Socket: " << server_config.ips[i] << " - Elegido: " << server_config.elegido[i] << std::endl;
                     }
                     break;
                 }
@@ -151,7 +177,7 @@ void udp_send_function(int udp_socket, const std::string &message, const sockadd
         sendto(udp_socket, message.c_str(), message.size(), 0, (struct sockaddr *)client_addr, sizeof(*client_addr));
     } else {
         // Broadcast to all clients
-        std::cout << "Broadcasting to all UDP clients" << std::endl;
+        std::cout << "Broadcasting para todos los UDP clients" << std::endl;
         for (const auto& [client_key, client_addr] : client_udp_sockets) {
             std::cout << "Sending to UDP client: " << client_key << std::endl;
             sendto(udp_socket, message.c_str(), message.size(), 0, (struct sockaddr *)&client_addr, sizeof(client_addr));
@@ -159,38 +185,44 @@ void udp_send_function(int udp_socket, const std::string &message, const sockadd
     }
 }
 
-void update_selected_client(int udp_socket) {
+// Function to send TCP broadcast messages
+void tcp_broadcast_function(const std::string &message) {
+    for (const auto& socket : server_config.ips) {
+        send(socket, message.c_str(), message.size(), 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Agregar un pequeño retraso entre envíos
+    }
+}
+
+void update_selected_client() {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, 3);
+    std::uniform_int_distribution<> dis(0, cantidad_max_Usuarios - 1);
 
     int selected_index = dis(gen);
     for (size_t i = 0; i < server_config.elegido.size(); ++i) {
         server_config.elegido[i] = (i == selected_index);
     }
 
-    for (const auto& [client_key, client_addr] : client_udp_sockets) {
-        // Send names
-        std::string names_message = "1";
-        for (const auto& name : server_config.nombres) {
-            names_message += name + ",";
-        }
-        udp_send_function(udp_socket, names_message, &client_addr);
-
-        // Send IPs
-        std::string ips_message = "2";
-        for (const auto& ip : server_config.ips) {
-            ips_message += std::to_string(ip) + ",";
-        }
-        udp_send_function(udp_socket, ips_message, &client_addr);
-
-        // Send selected
-        std::string selected_message = "3";
-        for (const auto& selected : server_config.elegido) {
-            selected_message += std::to_string(selected) + ",";
-        }
-        udp_send_function(udp_socket, selected_message, &client_addr);
+    // Send the names
+    std::string names_message = "1";
+    for (const auto& id : server_config.nombres) {
+        names_message += std::to_string(id) + ",";
     }
+    tcp_broadcast_function(names_message);
+
+    // Send the IPs (which are actually the sockets)
+    std::string ips_message = "2";
+    for (const auto& socket : server_config.ips) {
+        ips_message += std::to_string(socket) + ",";
+    }
+    tcp_broadcast_function(ips_message);
+
+    // Send the selected
+    std::string selected_message = "3";
+    for (const auto& selected : server_config.elegido) {
+        selected_message += (selected ? "1" : "0") + std::string(",");
+    }
+    tcp_broadcast_function(selected_message);
 }
 
 // Function to load data from CSV
@@ -258,5 +290,21 @@ void distribute_data_to_clients(int udp_socket) {
         auto last_client_addr = client_udp_sockets.rbegin()->second;
         udp_send_function(udp_socket, key_message, &last_client_addr);
         udp_send_function(udp_socket, value_message, &last_client_addr);
+    }
+}
+
+// Keep-alive monitor function
+void keep_alive_monitor() {
+    while (true) {
+        if (keep_alive_active) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (first_message_received) {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                std::lock_guard<std::mutex> lock(message_count_mutex);
+                std::cout << "Mensajes recibidos en el lapso del timeout: " << message_count << std::endl;
+                message_count = 0;
+                first_message_received = false;
+            }
+        }
     }
 }
