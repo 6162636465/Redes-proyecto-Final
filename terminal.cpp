@@ -16,7 +16,9 @@ int main() {
 
     std::string message;
     while (true) {
-        std::cout << "Enter message: ";
+        std::cout << "G: Start training" << std::endl;
+        std::cout << "C: Continue training" << std::endl;
+        std::cout << "Enter message: " << std::endl;
         std::getline(std::cin, message);
 
         send(tcp_socket, message.c_str(), message.size(), 0);
