@@ -54,7 +54,11 @@ int main(int argc, char *argv[]) {
     int tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in tcp_server_addr;
     tcp_server_addr.sin_family = AF_INET;
-    tcp_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    //Serv ip:18.225.56.177
+    //Local ip:127.0.0.1
+    //___________________________________________________________________________
+    tcp_server_addr.sin_addr.s_addr = inet_addr("18.225.56.177");
     tcp_server_addr.sin_port = htons(8080);
 
     connect(tcp_socket, (struct sockaddr *)&tcp_server_addr, sizeof(tcp_server_addr));
@@ -70,9 +74,9 @@ int main(int argc, char *argv[]) {
 
     sockaddr_in udp_server_addr;
     udp_server_addr.sin_family = AF_INET;
-    udp_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    udp_server_addr.sin_addr.s_addr = inet_addr("18.225.56.177");
     udp_server_addr.sin_port = htons(8081);
-
+    //___________________________________________________________________________
     // Send autologin message over TCP
     std::string tcp_message = "1";
     send(tcp_socket, tcp_message.c_str(), tcp_message.size(), 0);
