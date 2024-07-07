@@ -13,12 +13,19 @@
 #include <sys/socket.h>
 #include <algorithm>
 #include <chrono>
+#include <cstring>
+#include <sstream>
+#include <iomanip> 
+#include "tresEnRaya.h"
+#define MAXLINE 1000
 
 struct ServerConfig {
     std::vector<int> nombres;  // client_id
     std::vector<int> ips;  // client_socket
     std::vector<bool> elegido;
 };
+
+std::vector<TresEnRaya*> tableros;
 
 std::map<std::string, int> terminal_sockets;
 std::map<std::string, sockaddr_in> client_udp_sockets;
@@ -40,6 +47,18 @@ void load_data_aprendisaje(const std::string &filename);
 void print_data_aprendisaje();
 void distribute_data_to_clients(int udp_socket);
 void keep_alive_monitor();
+
+std::string deParsingTablero(std::string parsedTablero);
+std::string parsingTablero(std::string tablero);
+void jugadaIA(int idPlayer, std::string tabla, char fichaIA);
+void login_client(int sockCli, char buff[MAXLINE]);
+void start_game(int sockCli, char buff[MAXLINE]);
+void playing();
+void parseGame(int sockCli, char ficha, string tabla, char ganador);
+TresEnRaya* getTableroClientes(int socketCli);
+bool hayGanador(string tablero, char turno);
+string getNameSender(int sockCli);
+int getMainServer();
 
 int main() {
     load_data_aprendisaje("data.csv");
@@ -87,7 +106,7 @@ int main() {
 }
 
 void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket) {
-    char buffer[1024];
+    char buffer[MAXLINE];
     while (true) {
         int bytes_received = read(client_socket, buffer, sizeof(buffer));
         if (bytes_received > 0) {
@@ -136,11 +155,57 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                 }
                 case 'G': {
                     distribute_data_to_clients(udp_socket);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    tcp_broadcast_function(message);
                     break;
                 }
                 case 'M': {
                     print_data_aprendisaje();
                     break;
+                }
+                case 'C': {
+                    tcp_broadcast_function(message);
+                    break;
+                }
+                case 'L' : {
+                    login_client(client_socket, buffer);
+                    break;
+                }
+                case 'J' : {
+                    start_game(client_socket, buffer);
+                    break;
+                }
+                case 'T' : {
+                    // Juego | T ___ _ 
+                        int id;
+                        int posicion;
+                    // T - idJugador de 3 bytes - posicion
+                    if(client_socket == getMainServer()){
+                        TresEnRaya* player = getTableroClientes(id);
+                        char iaFicha = (player->ficha == 'X')? 'O' : 'X';
+                        player->movimiento(posicion, iaFicha);
+                        // winner:
+                        // 0 si no hay ganador
+                        // 1 si gana Jugador
+                        // 2 si gana IA
+                        char winner = '0';
+                        if(hayGanador(player->tablero, iaFicha)) winner = '2'; 
+                        parseGame(player->id, player->ficha, player->tablero, winner);
+                        break;
+                    }
+                    // T posicion
+                    else{
+                        TresEnRaya* player = getTableroClientes(client_socket);
+                        char iaFicha = (player->ficha == 'X')? 'O' : 'X';
+
+                        player->movimiento(posicion, player->ficha);
+                        if(hayGanador(player->tablero, player->ficha)) {
+                            parseGame(client_socket, player->ficha, player->tablero, '1');
+                            break;
+                        }
+                        jugadaIA(client_socket, player->tablero, iaFicha);
+                        break;
+                    }
                 }
                 default: {
                     std::cout << "Received TCP message: " << message << std::endl;
@@ -158,7 +223,7 @@ void handle_udp_connection(int udp_socket) {
     while (true) {
         sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
-        char buffer[1024];
+        char buffer[MAXLINE];
         int bytes_received = recvfrom(udp_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&client_addr, &client_addr_len);
         if (bytes_received > 0) {
             buffer[bytes_received] = '\0';
@@ -307,4 +372,213 @@ void keep_alive_monitor() {
             }
         }
     }
+}
+
+void notification(string conf, int sockCli){
+    string s_conf = to_string(conf.size()-1);
+
+    if(s_conf.size() == 1) s_conf = "0"+s_conf;
+    conf.insert(0, s_conf);
+    write(sockCli, conf.c_str(), conf.length());
+}
+
+void login_client(int sockCli, char buff[MAXLINE]){
+    char parsed[MAXLINE];
+    parsed[0] = buff[0];
+    int i = 1;
+
+    int size_name = atoi(buff+1);
+    std::string s_size_name = to_string(size_name); 
+    if(s_size_name.size() == 1) s_size_name = "0"+s_size_name;
+    strcpy(parsed + i,s_size_name.c_str());
+
+    read(sockCli, buff, size_name);
+    i+=2;
+
+    std::string name = buff;
+
+    strcpy(parsed + i,name.c_str());
+    i+= size_name;
+
+    bzero(buff,3 + size_name);
+    ///////////////////////
+    read(sockCli, buff, 2);
+
+    int size_pass = atoi(buff);
+    std::string s_size_pass = to_string(size_pass); 
+    if(s_size_pass.size() == 1) s_size_pass = "0"+s_size_pass;
+    
+    read(sockCli, buff, size_pass);
+
+    strcpy(parsed + i,s_size_pass.c_str());
+    i+= s_size_pass.size();
+
+    std::string pass = buff;
+    strcpy(parsed + i,pass.c_str());
+    i += pass.size();
+    ////////////////////////
+    bzero(buff,2 + size_pass);
+
+    auto it = find_if(tableros.begin(), tableros.end(), [&](const TresEnRaya* user) {
+        return user->jugador == name;
+    });
+
+    if (it != tableros.end() && (*it)->socket != 0) {
+        string conf = "Usuario Conectado en otra terminal.";
+        write(sockCli, conf.c_str(), conf.length());
+        return;
+    }
+
+    if (it == tableros.end()) {
+        TresEnRaya nuevoUsuario(name);
+        nuevoUsuario.pass = pass;
+        nuevoUsuario.socket = sockCli;
+        nuevoUsuario.id = tableros.size() + 1;
+        tableros.push_back(&nuevoUsuario);
+
+        printf("MSG: [%s] - Size: [%d] \n", parsed, i);
+
+        string conf = "Conectado!";
+        write(sockCli, conf.c_str(), conf.length());
+        return;
+    }
+
+    if (pass != (*it)->pass) {
+        string msg_error = "Intente de nuevo.";
+        write(sockCli, msg_error.c_str(), msg_error.size());
+        return;
+    }
+
+    (*it)->socket = sockCli;
+
+    printf("MSG: [%s] - Size: [%d] \n", parsed, i);
+
+    std::string conf = "Conectado!";
+    write(sockCli, conf.c_str(), conf.length());
+}
+
+void jugadaIA(int idPlayer, std::string tabla, char fichaIA){
+    int socketMain = getMainServer();
+
+    ostringstream stream;
+    stream << setw(3) << setfill('0') << idPlayer;
+    string idClienteParsed = stream.str(); 
+
+    std::string tabla_parseada = parsingTablero(tabla);
+    std::string msg_parsed  = "J" + idClienteParsed + tabla_parseada; msg_parsed.push_back(fichaIA);
+    printf("MSG: [%s] - Size: [%ld] \n", msg_parsed.c_str(), msg_parsed.size());
+    write(socketMain, msg_parsed.c_str(), msg_parsed.size());
+
+    msg_parsed = "Main: [Turno de IA]";
+    notification(msg_parsed, idPlayer);
+}
+
+void start_game(int sockCli, char buff[MAXLINE]){
+    TresEnRaya* player = getTableroClientes(sockCli);
+    if(player->id == 0) {
+        cout<<"error"<<endl;
+        return;
+    }
+
+    srand(time(0));
+
+    int turnoRandom = rand() % 2;
+    player->ficha = (turnoRandom == 0) ? 'X' : 'O';
+
+    if(player->ficha == 'O') {
+        jugadaIA(player->id, player->tablero, (player->ficha == 'O') ? 'X' : 'O');
+    }
+    else{  
+        parseGame(sockCli, player->ficha, player->tablero, '0');
+    }
+}
+
+void parseGame(int sockCli, char ficha, string tabla, char ganador){
+    char parsed[MAXLINE];
+    parsed[0] = 'T';
+    int i = 1;     
+    
+    parsed[i++] = ficha;
+
+    strcpy(parsed + i, tabla.c_str());
+    i+=tabla.size();
+
+    parsed[i++] = ganador;
+    
+    write(sockCli, parsed, i);
+    printf("MSG: [%s] - Size: [%d] \n", parsed, i);
+}
+
+TresEnRaya* getTableroClientes(int socketCli) {
+    for (int i = 0; i<tableros.size(); i++) {
+        if ((tableros[i]->socket == socketCli)) 
+            return tableros[i]; 
+    }
+    return nullptr;
+}
+
+bool hayGanador(string tablero, char turno) {
+    for (int i = 0; i < 9; i += 3) {
+        if (tablero[i] == turno && tablero[i] == tablero[i + 1] && tablero[i] == tablero[i + 2]) 
+            return true;
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (tablero[i] == turno && tablero[i] == tablero[i + 3] && tablero[i] == tablero[i + 6]) 
+            return true;
+    }
+    if (tablero[0] == turno && tablero[0] == tablero[4] && tablero[0] == tablero[8]) 
+        return true;
+    if (tablero[2] == turno && tablero[2] == tablero[4] && tablero[2] == tablero[6]) 
+        return true;
+    return false;
+}
+
+int getIDSender(int sockCli) {
+    for (const auto& user : tableros) {
+        if (user->socket == sockCli) {
+            return user->id;
+        }
+    }
+    return 0;
+}
+
+int getMainServer() {
+    for (size_t i = 0; i < server_config.nombres.size(); ++i) {
+        if(server_config.elegido[i]) return server_config.ips[i]; 
+    }
+    return 0;
+}
+
+std::string parsingTablero(std::string tablero) {
+    std::string vacio(9, '1');
+    std::string X_(9, '0');
+    std::string O_(9, '0');
+
+    for (int i = 0; i < 9; ++i) {
+        if (tablero[i] == 'X') {
+            vacio[i] = '0';
+            X_[i] = '1';
+        }
+        else if (tablero[i] == 'O') {
+            vacio[i] = '0';
+            O_[i] = '1';
+        }
+    }
+
+    return vacio + X_ + O_;
+}
+
+std::string deParsingTablero(std::string parsedTablero) {
+    std::string tablero(9, '0');
+
+    for (int i = 0; i < 9; ++i) {
+        if (parsedTablero[9 + i] == '1') {
+            tablero[i] = 'X';
+        }
+        else if (parsedTablero[18 + i] == '1') {
+            tablero[i] = 'O';
+        }
+    }
+
+    return tablero;
 }

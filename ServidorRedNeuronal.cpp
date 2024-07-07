@@ -10,6 +10,7 @@
 #include <sstream>
 #include <chrono>
 #include <iomanip>
+#include "tictactoe.h"
 
 struct ClientConfig {
     std::vector<std::string> nombres;
@@ -18,6 +19,15 @@ struct ClientConfig {
 };
 
 std::multimap<int, std::string> DataAprendisaje;
+std::vector<std::vector<double>> boards;
+std::vector<int> nextMoves;
+std::map<double,vector<double>> target;
+std::vector<double> result;
+std::vector<double> bestPlay;
+std::vector<double> sftmxResult;
+std::vector<double> sftmxBestPlay;
+Perceptron MLP=buildPerceptron();
+
 ClientConfig client_config;
 std::vector<int> received_keys;
 std::vector<std::string> received_values;
@@ -27,6 +37,9 @@ void handle_tcp_connection(int tcp_socket);
 void handle_udp_connection(int udp_socket, sockaddr_in udp_server_addr);
 void print_client_config();
 void send_keep_alive(int tcp_socket);
+bool compare_indices(int a, int b) {
+    return sftmxBestPlay[a] > sftmxBestPlay[b]; // Comparación para ordenar según los valores en vec
+}
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -137,6 +150,88 @@ void handle_tcp_connection(int tcp_socket) {
                     }
                     break;
                 }
+                case 'G': { // Iniciar el entrenamiento desde el Terminal
+                    processDataAprendisaje(DataAprendisaje,boards,nextMoves,target);
+                    int generacion=0;
+                    while(generacion<100){
+                        // calcular resultado
+                        cout<<"Generacion "<<++generacion<<endl;
+                        for(unsigned i=0; i<boards.size(); ++i){
+                        std::vector<double> result;
+                        // cout<<"Numero: "<<nextMoves[i]<<endl;
+                        MLP.feedForward(boards[i]);
+                        MLP.getResults(result); // vector<double> result | resultado del entrenamiento
+                        sftmxResult = MLP.softmax(result); // cambiar el result con el softmax | sftmx es global
+                        // enviar sftmx y numero de indice (unsigned i del for) a las demas RNs
+                        }
+                    }
+                }
+                case 'C': { // Continuar el entrenamiento desde el Terminal
+                    int generacion=0;
+                    while(generacion<100){
+                        // calcular resultado
+                        std::cout<<"Generacion "<<++generacion<<std::endl;
+                        for(unsigned i=0; i<boards.size(); ++i){
+                        std::vector<double> result;
+                        // cout<<"Numero: "<<nextMoves[i]<<endl;
+                        MLP.feedForward(boards[i]);
+                        MLP.getResults(result); // vector<double> result | resultado del entrenamiento
+                        sftmxResult = MLP.softmax(result); // cambiar el result con el softmaxResult | sftmxResult es global
+                        // enviar sftmx y numero de indice (unsigned i del for) a las demas RNs
+                        }
+                    }
+                }
+                case 'T': { // Recibir el tablero de la partida | Ej:T111111111000000000000000000
+
+                    // Juego | T___111111111000000000000000000_
+                    // T - idJugador de 3 bytes - tableroParsed - ficha
+
+                    std::string tablero;
+                    int bestMove=0;
+                    // cout<<"Tablero:"<< tablero;
+                    std::vector<double> board=stringToVector(tablero);
+                    MLP.feedForward(board);
+                    MLP.getResults(bestPlay);
+                    sftmxBestPlay = MLP.softmax(bestPlay);
+
+                    // showVector(" Resultado: ",result);
+                    // showVector(" SoftMax: ", sftmx);
+
+                    std::vector<int> bestPlayIndex(9);
+                    for (int i = 0; i < 9; ++i) {
+                        bestPlayIndex[i] = i;
+                    }
+
+                    std::sort(bestPlayIndex.begin(), bestPlayIndex.end(), compare_indices);
+
+                    for(int play=0; play<9; ++play){
+                        if(tablero[bestPlayIndex[play]]!=0){
+                            bestMove=bestPlayIndex[play];
+                            break;
+                        }
+                    }
+                    std::cout<<"Mejor Jugada: "<<bestMove<<std::endl;
+
+                    // enviar al Main la posicion
+                    // T - idJugador - posicion
+                }
+                case 'M': { // Recibir la media del resultado de cada entrenamiento
+                   // recibir sftmxResult y numero de indice
+                    // actualizar pesos
+                    int i;
+                    if(MLP.checkError2(sftmxResult,target[nextMoves[i]])){
+                        MLP.backProp(target[nextMoves[i]]);
+                    }
+                    // showVector(" Resultado: ", sftmx);
+                    // showVector("  Esperado: ", target[nextMoves[i]]);
+                    // cin.ignore();
+                    MLP.saveWeights();
+                    cout<<"Trained!"<<endl; 
+                }
+                case 'm': { // Recibir la media de la mejor jugada
+                    // Calculo de la media y enviar al main que enviara al cliente
+                }
+
                 default:
                     std::cout << "Received TCP message: " << message << std::endl;
                     break;
