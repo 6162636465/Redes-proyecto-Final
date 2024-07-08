@@ -42,6 +42,9 @@ struct ServerConfig {
     std::vector<bool> elegido;
 };
 
+std::mutex active_clients_mutex;
+std::vector<int> active_client_sockets;
+
 TresEnRaya tresEnRaya;
 
 std::map<std::string, int> terminal_sockets;
@@ -158,6 +161,9 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                     break;
                 }
                 case 'H': {
+                    std::lock_guard<std::mutex> lock(active_clients_mutex);
+                    active_client_sockets.push_back(client_socket);
+                    std::this_thread::sleep_for(std::chrono::seconds(1)); // Esperar 2 segundos antes de cambiar first_message_received
                     std::lock_guard<std::mutex> count_lock(message_count_mutex);
                     message_count++;
                     first_message_received = true;
@@ -439,16 +445,43 @@ void distribute_data_to_clients(int udp_socket) {
 }
 
 // Keep-alive monitor function
+
 void keep_alive_monitor() {
     while (true) {
         if (keep_alive_active) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             if (first_message_received) {
                 std::this_thread::sleep_for(std::chrono::seconds(5));
-                std::lock_guard<std::mutex> lock(message_count_mutex);
-                std::cout << "Mensajes recibidos en el lapso del timeout: " << message_count << std::endl;
-                message_count = 0;
-                first_message_received = false;
+                
+                {
+                    std::lock_guard<std::mutex> lock(message_count_mutex);
+                    std::cout << "Mensajes recibidos en el lapso del timeout: " << message_count << std::endl;
+                }
+                
+                std::lock_guard<std::mutex> lock_clients(active_clients_mutex);
+                
+                // Verificar los usuarios faltantes
+                int missing_users = cantidad_max_Usuarios - active_client_sockets.size();
+                if (missing_users > 0) {
+                    std::cout << "Usuarios faltantes: " << missing_users << std::endl;
+                    // Comparar con la estructura ServerConfig
+                    for (size_t i = 0; i < server_config.ips.size(); ++i) {
+                        if (std::find(active_client_sockets.begin(), active_client_sockets.end(), server_config.ips[i]) == active_client_sockets.end()) {
+                            std::cout << "Usuario faltante: " << server_config.ips[i] << std::endl;
+                            if (server_config.elegido[i]) {
+                                std::cout << "El usuario faltante es el elegido." << std::endl;
+                            }
+                        }
+                    }
+                }
+
+                // Limpiar el vector temporal y reiniciar el contador
+                active_client_sockets.clear();
+                {
+                    std::lock_guard<std::mutex> lock(message_count_mutex);
+                    message_count = 0;
+                    first_message_received = false;
+                }
             }
         }
     }
