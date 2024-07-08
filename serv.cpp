@@ -19,6 +19,23 @@
 #include "tresEnRaya.h"
 #define MAXLINE 1000
 
+
+// Estructura para envío de mensajes UDP
+struct envioMensajesUDP {
+    char Comando[1];     // Comando que ira al inicio del mensaje
+    uint32_t seq_num;    // Número de secuencia
+    uint16_t checksum;   // Checksum
+    char dataMensaje[1017]; // Datos (1024 - 4 bytes de secuencia - 2 bytes de checksum - 1 comando)
+};
+
+// Estructura para recibir mensajes UDP
+struct recibirMensajesUDP {
+    char Comando[1];
+    uint32_t seq_num;
+    uint16_t checksum;
+    char dataMensaje[1017];
+};
+
 struct ServerConfig {
     std::vector<int> nombres;  // client_id
     std::vector<int> ips;  // client_socket
@@ -40,13 +57,17 @@ int cantidad_max_Usuarios = 4;
 
 void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket);
 void handle_udp_connection(int udp_socket);
-void udp_send_function(int udp_socket, const std::string &message, const sockaddr_in *client_addr = nullptr);
+
+void udp_send_function(int udp_socket, const std::string &message, const sockaddr_in *client_addr, char comando, uint32_t seq_num);
+
 void tcp_broadcast_function(const std::string &message);
 void update_selected_client();
 void load_data_aprendisaje(const std::string &filename);
 void print_data_aprendisaje();
 void distribute_data_to_clients(int udp_socket);
 void keep_alive_monitor();
+
+
 
 std::string deParsingTablero(std::string parsedTablero);
 std::string parsingTablero(std::string tablero);
@@ -59,6 +80,7 @@ TresEnRaya* getTableroClientes(int socketCli);
 bool hayGanador(string tablero, char turno);
 string getNameSender(int sockCli);
 int getMainServer();
+uint16_t calcularChecksum(const char *data, size_t length);
 
 int main() {
     load_data_aprendisaje("data.csv");
@@ -141,12 +163,6 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                     first_message_received = true;
                     break;
                 }
-                case 'A': {
-                    // Broadcast message to all UDP clients
-                    std::cout << "Broadcasting message: " << message << std::endl;
-                    udp_send_function(udp_socket, message);
-                    break;
-                }
                 case 'B': {
                     for (size_t i = 0; i < server_config.nombres.size(); ++i) {
                         std::cout << "Client ID " << server_config.nombres[i] << " - Socket: " << server_config.ips[i] << " - Elegido: " << server_config.elegido[i] << std::endl;
@@ -154,9 +170,11 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                     break;
                 }
                 case 'G': {
+                    std::cout << " Caso G enviando por udp La data"<< std::endl;
+                    
                     distribute_data_to_clients(udp_socket);
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    tcp_broadcast_function(message);
+                    //tcp_broadcast_function(message);
                     break;
                 }
                 case 'M': {
@@ -173,6 +191,12 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                 }
                 case 'J' : {
                     start_game(client_socket, buffer);
+                    break;
+                }
+                case 'D': {
+                    for (const auto& [client_key, client_addr] : client_udp_sockets) {
+                        udp_send_function(udp_socket, "", &client_addr, 'D', 0);  // Enviar comando 'D' a los clientes UDP
+                    }
                     break;
                 }
                 case 'T' : {
@@ -236,19 +260,27 @@ void handle_udp_connection(int udp_socket) {
 }
 
 // Function to send UDP messages
-void udp_send_function(int udp_socket, const std::string &message, const sockaddr_in *client_addr) {
-    if (client_addr) {
-        // Send to a specific client
-        sendto(udp_socket, message.c_str(), message.size(), 0, (struct sockaddr *)client_addr, sizeof(*client_addr));
-    } else {
-        // Broadcast to all clients
-        std::cout << "Broadcasting para todos los UDP clients" << std::endl;
-        for (const auto& [client_key, client_addr] : client_udp_sockets) {
-            std::cout << "Sending to UDP client: " << client_key << std::endl;
-            sendto(udp_socket, message.c_str(), message.size(), 0, (struct sockaddr *)&client_addr, sizeof(client_addr));
-        }
-    }
+void udp_send_function(int udp_socket, const std::string &message, const sockaddr_in *client_addr, char comando, uint32_t seq_num) {
+    envioMensajesUDP packet;
+    packet.Comando[0] = comando;
+    packet.seq_num = seq_num;
+    strncpy(packet.dataMensaje, message.c_str(), sizeof(packet.dataMensaje) - 1);
+    packet.dataMensaje[sizeof(packet.dataMensaje) - 1] = '\0'; // Null-terminate the string
+    packet.checksum = calcularChecksum(packet.dataMensaje, sizeof(packet.dataMensaje));
+
+    // Imprimir los datos de la estructura antes de enviar
+    std::cout << "Preparing to send packet:" << std::endl;
+    std::cout << "  Comando: " << packet.Comando[0] << std::endl;
+    std::cout << "  Seq_num: " << packet.seq_num << std::endl;
+    std::cout << "  Checksum: " << packet.checksum << std::endl;
+    std::cout << "  DataMensaje: " << std::setw(50) << std::left << packet.dataMensaje << std::endl;
+    std::cout << "  Client IP: " << inet_ntoa(client_addr->sin_addr) << ":" << ntohs(client_addr->sin_port) << std::endl;
+
+    sendto(udp_socket, &packet, sizeof(packet), 0, (struct sockaddr *)client_addr, sizeof(*client_addr));
 }
+
+
+
 
 // Function to send TCP broadcast messages
 void tcp_broadcast_function(const std::string &message) {
@@ -316,13 +348,21 @@ void load_data_aprendisaje(const std::string &filename) {
 // Function to print the data structure
 void print_data_aprendisaje() {
     std::cout << "DataAprendisaje:" << std::endl;
+    int first_count = 0;
+    int second_count = 0;
+
     for (const auto& [key, value] : DataAprendisaje) {
         std::cout << "  " << key << " => " << value << std::endl;
+        first_count++;
+        if (!value.empty()) {
+            second_count++;
+        }
     }
-    std::cout << "Total elements: " << DataAprendisaje.size() << std::endl;
+
+    std::cout << "Total elements in first: " << first_count << std::endl;
+    std::cout << "Total elements in second (non-empty): " << second_count << std::endl;
 }
 
-// Function to distribute data to clients
 void distribute_data_to_clients(int udp_socket) {
     int num_clients = server_config.nombres.size();
     if (num_clients == 0) {
@@ -332,31 +372,60 @@ void distribute_data_to_clients(int udp_socket) {
 
     int part_size = DataAprendisaje.size() / num_clients;
     auto it = DataAprendisaje.begin();
+    uint32_t seq_num = 0;
 
-    for (const auto& [client_ip, client_addr] : client_udp_sockets) {
+    for (const auto& [client_key, client_addr] : client_udp_sockets) {
         std::string key_message = "K";
         std::string value_message = "L";
+        bool first_key = true;
+        bool first_value = true;
+
         for (int i = 0; i < part_size && it != DataAprendisaje.end(); ++i, ++it) {
-            key_message += std::to_string(it->first) + ",";
-            value_message += it->second + ",";
+            if (!first_key) {
+                key_message += ",";
+                value_message += ",";
+            }
+            key_message += std::to_string(it->first);
+            value_message += it->second;
+            first_key = false;
+            first_value = false;
         }
-        udp_send_function(udp_socket, key_message, &client_addr);
-        udp_send_function(udp_socket, value_message, &client_addr);
+
+        udp_send_function(udp_socket, key_message, &client_addr, 'K', seq_num);
+        udp_send_function(udp_socket, value_message, &client_addr, 'L', seq_num);
+        seq_num++;
     }
 
     // If there are remaining elements, send them to the last client
     if (it != DataAprendisaje.end()) {
         std::string key_message = "K";
         std::string value_message = "L";
-        for (; it != DataAprendisaje.end(); ++it) {
-            key_message += std::to_string(it->first) + ",";
-            value_message += it->second + ",";
+        bool first_key = true;
+        bool first_value = true;
+
+        while (it != DataAprendisaje.end()) {
+            if (!first_key) {
+                key_message += ",";
+                value_message += ",";
+            }
+            key_message += std::to_string(it->first);
+            value_message += it->second;
+            first_key = false;
+            first_value = false;
+            ++it;
         }
-        auto last_client_addr = client_udp_sockets.rbegin()->second;
-        udp_send_function(udp_socket, key_message, &last_client_addr);
-        udp_send_function(udp_socket, value_message, &last_client_addr);
+
+        auto last_client_addr = &client_udp_sockets.rbegin()->second;
+        udp_send_function(udp_socket, key_message, last_client_addr, 'K', seq_num);
+        udp_send_function(udp_socket, value_message, last_client_addr, 'L', seq_num);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+     // Send 'Z' message to indicate end of data transmission
+    for (const auto& [client_key, client_addr] : client_udp_sockets) {
+        udp_send_function(udp_socket, "", &client_addr, 'Z', seq_num);
     }
 }
+
 
 // Keep-alive monitor function
 void keep_alive_monitor() {
@@ -581,4 +650,15 @@ std::string deParsingTablero(std::string parsedTablero) {
     }
 
     return tablero;
+}
+
+uint16_t calcularChecksum(const char *data, size_t length) {
+    uint32_t sum = 0;
+    for (size_t i = 0; i < length; ++i) {
+        sum += static_cast<uint8_t>(data[i]);
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    return ~sum;
 }
