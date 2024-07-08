@@ -260,8 +260,8 @@ void handle_tcp_connection(int tcp_socket) {
 
                     // Juego | T___111111111000000000000000000_
                     // T - idJugador de 3 bytes - tableroParsed - ficha
-
-                    std::string tablero;
+                    std::string idCliente = message.substr(1, 3); 
+                    std::string tablero = message.substr(4, 27);;
                     int bestMove = 0;
                     // cout<<"Tablero:"<< tablero;
                     std::vector<double> board = stringToVector(tablero);
@@ -285,9 +285,12 @@ void handle_tcp_connection(int tcp_socket) {
                             break;
                         }
                     }
+                    std::cout << "ID Cliente: " << idCliente << std::endl;
                     std::cout << "Mejor Jugada: " << bestMove << std::endl;
 
                     // enviar al Main la posicion
+                    string parsed = "T" + idCliente + to_string(bestMove);
+                    write(tcp_socket, parsed.c_str(), parsed.length());
                     // T - idJugador - posicion
                     break;
                 }
