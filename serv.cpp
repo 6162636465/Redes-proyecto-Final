@@ -174,7 +174,19 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                     
                     distribute_data_to_clients(udp_socket);
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    //tcp_broadcast_function(message);
+                    tcp_broadcast_function(message);
+            
+                    
+                    break;
+                }
+                case 'm': {
+                    cout<<"mensaje recibido: "<<message<<endl;
+                    send(server_config.ips[0], message.c_str(), message.size(), 0);
+                    break;
+                }
+                case 'p': {
+                    cout<<"MEDIA RECIBIDA: "<<message<<endl;
+                    tcp_broadcast_function(message);
                     break;
                 }
                 case 'M': {
@@ -182,6 +194,7 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                     break;
                 }
                 case 'C': {
+                    message[0] = 'G';
                     tcp_broadcast_function(message);
                     break;
                 }

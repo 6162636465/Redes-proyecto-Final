@@ -46,6 +46,9 @@ std::map<double, std::vector<double>> target;
 std::vector<double> result;
 std::vector<double> bestPlay;
 std::vector<double> sftmxResult;
+std::vector<double> media_calculada = {0,0,0,0,0,0,0,0,0};
+int count_output_rn_recibido=0;
+int generacion = 0;
 std::vector<double> sftmxBestPlay;
 Perceptron MLP = buildPerceptron();
 
@@ -195,19 +198,46 @@ void handle_tcp_connection(int tcp_socket) {
                 }
                 case 'G': { // Iniciar el entrenamiento desde el Terminal
                     processDataAprendisaje(DataAprendisaje, boards, nextMoves, target);
-                    int generacion = 0;
-                    while (generacion < 100) {
-                        // calcular resultado
-                        std::cout << "Generacion " << ++generacion << std::endl;
-                        for (unsigned i = 0; i < boards.size(); ++i) {
-                            std::vector<double> result;
-                            // cout<<"Numero: "<<nextMoves[i]<<endl;
-                            MLP.feedForward(boards[i]);
-                            MLP.getResults(result); // vector<double> result | resultado del entrenamiento
-                            sftmxResult = MLP.softmax(result); // cambiar el result con el softmax | sftmx es global
-                            // enviar sftmx y numero de indice (unsigned i del for) a las demas RNs
+                    std::vector<double> sftmxacumulado = {0,0,0,0,0,0,0,0,0};
+                    // calcular resultado
+                    std::cout << "Generacion " << ++generacion << std::endl;
+                    for (unsigned i = 0; i < boards.size(); ++i) {
+                        std::vector<double> result;
+                        // cout<<"Numero: "<<nextMoves[i]<<endl;
+                        MLP.feedForward(boards[i]);
+                        MLP.getResults(result); // vector<double> result | resultado del entrenamiento
+                        sftmxResult = MLP.softmax(result); // cambiar el result con el softmax | sftmx es global
+                        // enviar sftmx y numero de indice (unsigned i del for) a las demas RNs
+                        //cout<<" board: "<<i <<endl;
+                        for(int i = 0; i <sftmxResult.size();i++)
+                        {
+                            //cout<<"sftmxResul: "<<sftmxResult[i]<<endl;
+                            sftmxacumulado[i] += sftmxResult[i];
                         }
+
                     }
+
+                    string tcp_message = "m";
+                    for(int i = 0; i <sftmxacumulado.size();i++)
+                        {
+                            sftmxacumulado[i]=sftmxacumulado[i]/boards.size();
+                            sftmxacumulado[i]*=1000000;
+                            //cout<<"sftmxacumulado por 1000000: "<<sftmxacumulado[i]*1000000<<endl;
+                            //cout<<"sftmxacumulado: "<<sftmxacumulado[i]<<endl;
+                            tcp_message+=to_string(sftmxacumulado[i])[0];
+                            tcp_message+=to_string(sftmxacumulado[i])[1];
+                            tcp_message+=to_string(sftmxacumulado[i])[2];
+                            tcp_message+=to_string(sftmxacumulado[i])[3];
+                            tcp_message+=to_string(sftmxacumulado[i])[4];
+                            tcp_message+=to_string(sftmxacumulado[i])[5];
+                            
+                            
+                        }
+                    cout<<"OutPut RN: "<<tcp_message<<endl;
+                    send(tcp_socket, tcp_message.c_str(), tcp_message.size(), 0);
+
+                        
+                    
                     break;
                 }
                 case 'C': { // Continuar el entrenamiento desde el Terminal
@@ -261,10 +291,38 @@ void handle_tcp_connection(int tcp_socket) {
                     // T - idJugador - posicion
                     break;
                 }
-                case 'M': { // Recibir la media del resultado de cada entrenamiento
+                case 'p': { // Recibir la media del resultado de cada entrenamiento
                     // recibir sftmxResult y numero de indice
                     // actualizar pesos
-                    int i;
+                    cout<<"MEDIA RECIBIDA: "<<message<<endl;
+                    int i=0;
+                    string value;
+                    int count_interno = 0;
+                    std::vector<double> media_recibida= {0,0,0,0,0,0,0,0,0};
+                    for(int j =1;j<message.size();j++)
+                    {
+                        value+=message[j];
+                        if(value.size()==6)
+                        {
+                            media_recibida[count_interno]+=stoi(value);
+                            count_interno+=1;
+                            value.clear();
+                            //cout<<"pos vector: "<<count_interno-1<<endl;
+                            //cout<<"media acumulada recibida "<<media_recibida[count_interno-1]<<endl;
+                        }
+                    }
+
+                    for(int j = 0; j <media_recibida.size()-1;j++)
+                    {
+                        if(media_recibida[j] >= media_recibida[i])
+                        {
+                            i = j;
+                            //cout<<"mayor: "<<media_recibida[i]<<endl;
+                        }
+                    }
+                    cout<<"posicion con mayor porcentaje de la media: "<<i<<endl;
+
+
                     if (MLP.checkError2(sftmxResult, target[nextMoves[i]])) {
                         MLP.backProp(target[nextMoves[i]]);
                     }
@@ -277,6 +335,52 @@ void handle_tcp_connection(int tcp_socket) {
                 }
                 case 'm': { // Recibir la media de la mejor jugada
                     // Calculo de la media y enviar al main que enviara al cliente
+                    count_output_rn_recibido+=1;
+                    //cout<<"MENSAJE RECIBIDO PARA CALCULAR LA MEDIA: "<<message<<endl;
+                    //cout<<"size mensaje: "<<message.size()<<endl;
+                    string value;
+                    int count_interno = 0;
+                    for(int i =1;i<message.size();i++)
+                    {
+                        if(count_interno == 9)
+                        {
+                            count_output_rn_recibido+=1;
+                            count_interno=0;
+                            continue;
+
+                        }
+                        value+=message[i];
+                        if(value.size()==6)
+                        {
+                            media_calculada[count_interno]+=stoi(value);
+                            count_interno+=1;
+                            value.clear();
+                            //cout<<"pos vector: "<<count_interno-1<<endl;
+                            //cout<<"media acumulada "<<media_calculada[count_interno-1]<<endl;
+                        }
+                    }
+
+                    if(count_output_rn_recibido == client_config.ips.size())
+                    {
+                        string tcp_message = "p";
+                        for(int i = 0;i <media_calculada.size();i++)
+                        {
+                            media_calculada[i]/=client_config.ips.size();
+                            //cout<<"MEDIA CALCULADA: "<<media_calculada[i]<<endl;
+                            tcp_message+=to_string(media_calculada[i])[0];
+                            tcp_message+=to_string(media_calculada[i])[1];
+                            tcp_message+=to_string(media_calculada[i])[2];
+                            tcp_message+=to_string(media_calculada[i])[3];
+                            tcp_message+=to_string(media_calculada[i])[4];
+                            tcp_message+=to_string(media_calculada[i])[5];
+                        }
+
+                        send(tcp_socket, tcp_message.c_str(), tcp_message.size(), 0);
+                        count_output_rn_recibido = 0;
+                    }
+                    
+
+                    
                     break;
                 }
                 default:
