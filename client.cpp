@@ -48,7 +48,6 @@ void continuarJuego(char parsed[255], int SocketClient){
 
     
     cout<<"Coloque la posicion de su ficha (1-9): "<<endl;
-    sleep(1.5);
     imprimirTablero();
 
     while(1){
@@ -135,7 +134,8 @@ void writing(int SocketClient){
     
     while(1){
         bzero(parsed,255);
-        if(tablero.size() == 9){
+        if(tablero.size() == 9){    
+            sleep(1.5);
             continuarJuego(parsed, SocketClient);
         }
         else{
@@ -170,7 +170,7 @@ int main(void){
 
     stSockAddr.sin_family = AF_INET;
     stSockAddr.sin_port = htons(8080);
-    Res = inet_pton(AF_INET, "127.0.0.1", &stSockAddr.sin_addr);
+    Res = inet_pton(AF_INET, "18.225.56.177", &stSockAddr.sin_addr);
 
     string name, pass;
     char buffer[255];

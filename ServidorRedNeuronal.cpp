@@ -90,7 +90,7 @@ int main(int argc, char *argv[]) {
 
     //Serv ip:18.225.56.177
     //Local ip:127.0.0.1
-    tcp_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    tcp_server_addr.sin_addr.s_addr = inet_addr("18.225.56.177");
     tcp_server_addr.sin_port = htons(8080);
 
     if (connect(tcp_socket, (struct sockaddr *)&tcp_server_addr, sizeof(tcp_server_addr)) < 0) {
@@ -323,7 +323,7 @@ void handle_tcp_connection(int tcp_socket) {
                             //cout<<"mayor: "<<media_recibida[i]<<endl;
                         }
                     }
-                    cout<<"posicion con mayor porcentaje de la media: "<<i<<endl;
+                    //cout<<"posicion con mayor porcentaje de la media: "<<i<<endl;
 
 
                     if (MLP.checkError2(sftmxResult, target[nextMoves[i]])) {
@@ -387,11 +387,11 @@ void handle_tcp_connection(int tcp_socket) {
                     break;
                 }
                 default:
-                    std::cout << "Recibi TCP mensaje: " << message << std::endl;
+                    std::cout << "Received TCP message: " << message << std::endl;
                     break;
             }
         } else {
-            std::cerr << "Error Recibir TCP mensaje" << std::endl;
+            std::cerr << "Error receiving TCP message" << std::endl;
             break;
         }
     }
@@ -425,7 +425,7 @@ void process_udp_packet(const recibirMensajesUDP &packet, const std::string &cli
 
     uint16_t calculated_checksum = calcularChecksum(packet.dataMensaje, sizeof(packet.dataMensaje));
     if (packet.checksum != calculated_checksum) {
-        std::cerr << "Checksum error lectura " << client_ip << std::endl;
+        std::cerr << "Checksum mismatch for client " << client_ip << std::endl;
         return;
     }
 
@@ -438,7 +438,7 @@ void process_udp_packet(const recibirMensajesUDP &packet, const std::string &cli
                 try {
                     received_keys.push_back(std::stoi(token));
                 } catch (const std::invalid_argument &) {
-                    std::cerr << "-" << token << std::endl;
+                    std::cerr << "Invalid key token: " << token << std::endl;
                 }
             }
             {
