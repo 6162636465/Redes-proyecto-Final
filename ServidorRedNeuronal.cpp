@@ -8,10 +8,27 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sstream>
+#include <mutex> 
 #include <chrono>
 #include <iomanip>
 #include "tictactoe.h"
 
+
+// Estructura para envío de mensajes UDP
+struct envioMensajesUDP {
+    char Comando[1];     // Comando que ira al inicio del mensaje
+    uint32_t seq_num;    // Número de secuencia
+    uint16_t checksum;   // Checksum
+    char dataMensaje[1017]; // Datos (1024 - 4 bytes de secuencia - 2 bytes de checksum - 1 comando)
+};
+
+// Estructura para recibir mensajes UDP
+struct recibirMensajesUDP {
+    char Comando[1];
+    uint32_t seq_num;
+    uint16_t checksum;
+    char dataMensaje[1017];
+};
 struct ClientConfig {
     std::vector<std::string> nombres;
     std::vector<int> ips;
@@ -19,23 +36,32 @@ struct ClientConfig {
 };
 
 std::multimap<int, std::string> DataAprendisaje;
+std::mutex data_mutex;
+std::mutex seq_num_mutex;
+std::map<std::string, uint32_t> expected_seq_num;
+
 std::vector<std::vector<double>> boards;
 std::vector<int> nextMoves;
-std::map<double,vector<double>> target;
+std::map<double, std::vector<double>> target;
 std::vector<double> result;
 std::vector<double> bestPlay;
 std::vector<double> sftmxResult;
 std::vector<double> sftmxBestPlay;
-Perceptron MLP=buildPerceptron();
+Perceptron MLP = buildPerceptron();
 
 ClientConfig client_config;
+std::map<int, sockaddr_in> client_udp_sockets;
 std::vector<int> received_keys;
 std::vector<std::string> received_values;
 bool keep_alive_active = false;
 
+uint16_t calcularChecksum(const char *data, size_t length);
 void handle_tcp_connection(int tcp_socket);
-void handle_udp_connection(int udp_socket, sockaddr_in udp_server_addr);
+void handle_udp_connection(int udp_socket);
+void process_udp_packet(const recibirMensajesUDP &packet, const std::string &client_ip);
+
 void print_client_config();
+void print_data_aprendisaje(); //  función para imprimir el map de DataAprendisaje
 void send_keep_alive(int tcp_socket);
 bool compare_indices(int a, int b) {
     return sftmxBestPlay[a] > sftmxBestPlay[b]; // Comparación para ordenar según los valores en vec
@@ -52,18 +78,24 @@ int main(int argc, char *argv[]) {
 
     // Setup TCP client
     int tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcp_socket < 0) {
+        std::cerr << "Error creating TCP socket" << std::endl;
+        return 1;
+    }
     sockaddr_in tcp_server_addr;
     tcp_server_addr.sin_family = AF_INET;
 
     //Serv ip:18.225.56.177
     //Local ip:127.0.0.1
-    //___________________________________________________________________________
-    tcp_server_addr.sin_addr.s_addr = inet_addr("18.225.56.177");
+    tcp_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     tcp_server_addr.sin_port = htons(8080);
 
-    connect(tcp_socket, (struct sockaddr *)&tcp_server_addr, sizeof(tcp_server_addr));
+    if (connect(tcp_socket, (struct sockaddr *)&tcp_server_addr, sizeof(tcp_server_addr)) < 0) {
+        std::cerr << "Error connecting to TCP server" << std::endl;
+        return 1;
+    }
 
-    // Setup UDP client
+   // Setup UDP client
     int udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
     sockaddr_in udp_client_addr;
     udp_client_addr.sin_family = AF_INET;
@@ -72,21 +104,28 @@ int main(int argc, char *argv[]) {
 
     bind(udp_socket, (struct sockaddr *)&udp_client_addr, sizeof(udp_client_addr));
 
+
     sockaddr_in udp_server_addr;
     udp_server_addr.sin_family = AF_INET;
-    udp_server_addr.sin_addr.s_addr = inet_addr("18.225.56.177");
+    udp_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     udp_server_addr.sin_port = htons(8081);
-    //___________________________________________________________________________
+
     // Send autologin message over TCP
     std::string tcp_message = "1";
-    send(tcp_socket, tcp_message.c_str(), tcp_message.size(), 0);
+    if (send(tcp_socket, tcp_message.c_str(), tcp_message.size(), 0) < 0) {
+        std::cerr << "Error sending TCP message" << std::endl;
+        return 1;
+    }
 
     // Send autologin message over UDP
     std::string udp_message = "1";
-    sendto(udp_socket, udp_message.c_str(), udp_message.size(), 0, (struct sockaddr *)&udp_server_addr, sizeof(udp_server_addr));
+    if (sendto(udp_socket, udp_message.c_str(), udp_message.size(), 0, (struct sockaddr *)&udp_server_addr, sizeof(udp_server_addr)) < 0) {
+        std::cerr << "Error sending UDP message" << std::endl;
+        return 1;
+    }
 
     std::thread tcp_thread(handle_tcp_connection, tcp_socket);
-    std::thread udp_thread(handle_udp_connection, udp_socket, udp_server_addr);
+    std::thread udp_thread(handle_udp_connection, udp_socket);
 
     tcp_thread.join();
     udp_thread.join();
@@ -155,35 +194,37 @@ void handle_tcp_connection(int tcp_socket) {
                     break;
                 }
                 case 'G': { // Iniciar el entrenamiento desde el Terminal
-                    processDataAprendisaje(DataAprendisaje,boards,nextMoves,target);
-                    int generacion=0;
-                    while(generacion<100){
+                    processDataAprendisaje(DataAprendisaje, boards, nextMoves, target);
+                    int generacion = 0;
+                    while (generacion < 100) {
                         // calcular resultado
-                        cout<<"Generacion "<<++generacion<<endl;
-                        for(unsigned i=0; i<boards.size(); ++i){
-                        std::vector<double> result;
-                        // cout<<"Numero: "<<nextMoves[i]<<endl;
-                        MLP.feedForward(boards[i]);
-                        MLP.getResults(result); // vector<double> result | resultado del entrenamiento
-                        sftmxResult = MLP.softmax(result); // cambiar el result con el softmax | sftmx es global
-                        // enviar sftmx y numero de indice (unsigned i del for) a las demas RNs
+                        std::cout << "Generacion " << ++generacion << std::endl;
+                        for (unsigned i = 0; i < boards.size(); ++i) {
+                            std::vector<double> result;
+                            // cout<<"Numero: "<<nextMoves[i]<<endl;
+                            MLP.feedForward(boards[i]);
+                            MLP.getResults(result); // vector<double> result | resultado del entrenamiento
+                            sftmxResult = MLP.softmax(result); // cambiar el result con el softmax | sftmx es global
+                            // enviar sftmx y numero de indice (unsigned i del for) a las demas RNs
                         }
                     }
+                    break;
                 }
                 case 'C': { // Continuar el entrenamiento desde el Terminal
-                    int generacion=0;
-                    while(generacion<100){
+                    int generacion = 0;
+                    while (generacion < 100) {
                         // calcular resultado
-                        std::cout<<"Generacion "<<++generacion<<std::endl;
-                        for(unsigned i=0; i<boards.size(); ++i){
-                        std::vector<double> result;
-                        // cout<<"Numero: "<<nextMoves[i]<<endl;
-                        MLP.feedForward(boards[i]);
-                        MLP.getResults(result); // vector<double> result | resultado del entrenamiento
-                        sftmxResult = MLP.softmax(result); // cambiar el result con el softmaxResult | sftmxResult es global
-                        // enviar sftmx y numero de indice (unsigned i del for) a las demas RNs
+                        std::cout << "Generacion " << ++generacion << std::endl;
+                        for (unsigned i = 0; i < boards.size(); ++i) {
+                            std::vector<double> result;
+                            // cout<<"Numero: "<<nextMoves[i]<<endl;
+                            MLP.feedForward(boards[i]);
+                            MLP.getResults(result); // vector<double> result | resultado del entrenamiento
+                            sftmxResult = MLP.softmax(result); // cambiar el result con el softmaxResult | sftmxResult es global
+                            // enviar sftmx y numero de indice (unsigned i del for) a las demas RNs
                         }
                     }
+                    break;
                 }
                 case 'T': { // Recibir el tablero de la partida | Ej:T111111111000000000000000000
 
@@ -191,9 +232,9 @@ void handle_tcp_connection(int tcp_socket) {
                     // T - idJugador de 3 bytes - tableroParsed - ficha
 
                     std::string tablero;
-                    int bestMove=0;
+                    int bestMove = 0;
                     // cout<<"Tablero:"<< tablero;
-                    std::vector<double> board=stringToVector(tablero);
+                    std::vector<double> board = stringToVector(tablero);
                     MLP.feedForward(board);
                     MLP.getResults(bestPlay);
                     sftmxBestPlay = MLP.softmax(bestPlay);
@@ -208,99 +249,143 @@ void handle_tcp_connection(int tcp_socket) {
 
                     std::sort(bestPlayIndex.begin(), bestPlayIndex.end(), compare_indices);
 
-                    for(int play=0; play<9; ++play){
-                        if(tablero[bestPlayIndex[play]]!=0){
-                            bestMove=bestPlayIndex[play];
+                    for (int play = 0; play < 9; ++play) {
+                        if (tablero[bestPlayIndex[play]] != '0') {
+                            bestMove = bestPlayIndex[play];
                             break;
                         }
                     }
-                    std::cout<<"Mejor Jugada: "<<bestMove<<std::endl;
+                    std::cout << "Mejor Jugada: " << bestMove << std::endl;
 
                     // enviar al Main la posicion
                     // T - idJugador - posicion
+                    break;
                 }
                 case 'M': { // Recibir la media del resultado de cada entrenamiento
-                   // recibir sftmxResult y numero de indice
+                    // recibir sftmxResult y numero de indice
                     // actualizar pesos
                     int i;
-                    if(MLP.checkError2(sftmxResult,target[nextMoves[i]])){
+                    if (MLP.checkError2(sftmxResult, target[nextMoves[i]])) {
                         MLP.backProp(target[nextMoves[i]]);
                     }
                     // showVector(" Resultado: ", sftmx);
                     // showVector("  Esperado: ", target[nextMoves[i]]);
                     // cin.ignore();
                     MLP.saveWeights();
-                    cout<<"Trained!"<<endl; 
+                    std::cout << "Trained!" << std::endl;
+                    break;
                 }
                 case 'm': { // Recibir la media de la mejor jugada
                     // Calculo de la media y enviar al main que enviara al cliente
+                    break;
                 }
-
                 default:
                     std::cout << "Received TCP message: " << message << std::endl;
                     break;
             }
+        } else {
+            std::cerr << "Error receiving TCP message" << std::endl;
+            break;
         }
     }
 }
 
-void handle_udp_connection(int udp_socket, sockaddr_in udp_server_addr) {
+void handle_udp_connection(int udp_socket) {
     while (true) {
-        char buffer[1024];
-        socklen_t server_addr_len = sizeof(udp_server_addr);
-        int bytes_received = recvfrom(udp_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&udp_server_addr, &server_addr_len);
+        sockaddr_in client_addr;
+        socklen_t client_addr_len = sizeof(client_addr);
+        recibirMensajesUDP packet;
+        int bytes_received = recvfrom(udp_socket, &packet, sizeof(packet), 0, (struct sockaddr *)&client_addr, &client_addr_len);
         if (bytes_received > 0) {
-            buffer[bytes_received] = '\0';
-            std::string message(buffer);
-            std::istringstream ss(message.substr(1));
-            std::string token;
-            switch (message[0]) {
-                case 'K': {
-                    received_keys.clear();
-                    while (std::getline(ss, token, ',')) {
-                        if (!token.empty()) {
-                            received_keys.push_back(std::stoi(token));
-                        }
-                    }
-                    std::cout << "Received keys: ";
-                    for (const auto& key : received_keys) {
-                        std::cout << key << " ";
-                    }
-                    std::cout << std::endl;
-                    break;
-                }
-                case 'L': {
-                    received_values.clear();
-                    while (std::getline(ss, token, ',')) {
-                        if (!token.empty()) {
-                            received_values.push_back(token);
-                        }
-                    }
-                    std::cout << "Received values: ";
-                    for (const auto& value : received_values) {
-                        std::cout << value << " ";
-                    }
-                    std::cout << std::endl;
-                    // Ensure the number of keys and values match
-                    if (received_keys.size() == received_values.size()) {
-                        for (size_t i = 0; i < received_keys.size(); ++i) {
-                            DataAprendisaje.insert({received_keys[i], received_values[i]});
-                        }
-                    }
-                    std::cout << "Updated DataAprendisaje: ";
-                    for (const auto& [key, value] : DataAprendisaje) {
-                        std::cout << key << "=>" << value << " ";
-                    }
-                    std::cout << std::endl;
-                    break;
-                }
-                default:
-                    std::cout << "Received UDP message: " << message << std::endl;
-                    break;
+            std::string client_ip = inet_ntoa(client_addr.sin_addr);
+            {
+                std::lock_guard<std::mutex> lock(data_mutex);
+                client_udp_sockets[ntohs(client_addr.sin_port)] = client_addr;
             }
+            process_udp_packet(packet, client_ip);
+        } else {
+            std::cerr << "Error receiving UDP message" << std::endl;
         }
     }
 }
+
+void process_udp_packet(const recibirMensajesUDP &packet, const std::string &client_ip) {
+    uint32_t seq_num;
+    {
+        std::lock_guard<std::mutex> lock(seq_num_mutex);
+        seq_num = expected_seq_num[client_ip];
+    }
+
+    uint16_t calculated_checksum = calcularChecksum(packet.dataMensaje, sizeof(packet.dataMensaje));
+    if (packet.checksum != calculated_checksum) {
+        std::cerr << "Checksum mismatch for client " << client_ip << std::endl;
+        return;
+    }
+
+    std::istringstream ss(packet.dataMensaje);
+    std::string token;
+    switch (packet.Comando[0]) {
+        case 'K': {
+            std::vector<int> received_keys;
+            while (std::getline(ss, token, ',')) {
+                try {
+                    received_keys.push_back(std::stoi(token));
+                } catch (const std::invalid_argument &) {
+                    std::cerr << "Invalid key token: " << token << std::endl;
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(data_mutex);
+                for (size_t i = 0; i < received_keys.size(); ++i) {
+                    DataAprendisaje.insert({received_keys[i], ""});
+                }
+            }
+            break;
+        }
+        case 'L': {
+            std::vector<std::string> received_values;
+            while (std::getline(ss, token, ',')) {
+                received_values.push_back(token);
+            }
+            {
+                std::lock_guard<std::mutex> lock(data_mutex);
+                auto it = DataAprendisaje.begin();
+                for (const auto& value : received_values) {
+                    if (it != DataAprendisaje.end()) {
+                        it->second = value;
+                        ++it;
+                    }
+                }
+            }
+            break;
+        }
+        case 'Z': {
+            std::lock_guard<std::mutex> lock(data_mutex);
+            for (auto it = DataAprendisaje.begin(); it != DataAprendisaje.end(); ) {
+                if (it->second.empty() || it->second == "L") {
+                    it = DataAprendisaje.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            break;
+        }
+        case 'D': {
+            std::lock_guard<std::mutex> lock(data_mutex);
+            print_data_aprendisaje();
+            break;
+        }
+        default:
+            std::cerr << "Invalid command: " << packet.Comando[0] << std::endl;
+            return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(seq_num_mutex);
+        expected_seq_num[client_ip]++;
+    }
+}
+
 
 void send_keep_alive(int tcp_socket) {
     while (true) {
@@ -313,8 +398,11 @@ void send_keep_alive(int tcp_socket) {
            << std::setw(2) << std::setfill('0') << now_tm->tm_min;
         
         std::string time_message = ss.str();
-        send(tcp_socket, time_message.c_str(), time_message.size(), 0);
-        std::cout << "Sent keep-alive message: " << time_message << std::endl; // Imprimir el mensaje enviado
+        if (send(tcp_socket, time_message.c_str(), time_message.size(), 0) < 0) {
+            std::cerr << "Error sending keep-alive message" << std::endl;
+        } else {
+            std::cout << "Sent keep-alive message: " << time_message << std::endl; // Imprimir el mensaje enviado
+        }
         std::this_thread::sleep_for(std::chrono::minutes(1));
     }
 }
@@ -348,4 +436,22 @@ void print_client_config() {
     }
     std::cout << "]" << std::endl;
     std::cout << "}" << std::endl;
+}
+
+void print_data_aprendisaje() {
+    std::cout << "DataAprendisaje:" << std::endl;
+    for (const auto& [key, value] : DataAprendisaje) {
+        std::cout << "  " << key << " => " << value << std::endl;
+    }
+}
+
+uint16_t calcularChecksum(const char *data, size_t length) {
+    uint32_t sum = 0;
+    for (size_t i = 0; i < length; ++i) {
+        sum += static_cast<uint8_t>(data[i]);
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    return ~sum;
 }
