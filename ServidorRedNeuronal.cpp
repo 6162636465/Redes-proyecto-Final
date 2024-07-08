@@ -110,7 +110,7 @@ int main(int argc, char *argv[]) {
 
     sockaddr_in udp_server_addr;
     udp_server_addr.sin_family = AF_INET;
-    udp_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    udp_server_addr.sin_addr.s_addr = inet_addr("18.225.56.177");
     udp_server_addr.sin_port = htons(8081);
 
     // Send autologin message over TCP
