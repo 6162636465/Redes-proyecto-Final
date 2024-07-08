@@ -46,17 +46,21 @@ void continuarJuego(char parsed[255], int SocketClient){
     int indice = 0;
     string posicion;
 
+    
+    cout<<"Coloque la posicion de su ficha (1-9): "<<endl;
+    sleep(1.5);
     imprimirTablero();
 
     while(1){
         cout<<endl;
-        cout<<"Coloque la posicion de su ficha (1-9): "<<endl;
         getline(cin, posicion);
         
         indice = atoi(posicion.c_str()) - 1;
 
         if (indice >= 0 && indice < tablero.size() && tablero[indice] == '0') break;
         else cout<<"Posicion invalida o ya ocupada. Intente de nuevo."<<endl;
+        
+        cout<<"Coloque la posicion de su ficha (1-9): "<<endl;
     }    
 
     parsed[0] = 'T';    
@@ -64,7 +68,6 @@ void continuarJuego(char parsed[255], int SocketClient){
 
     strcpy(parsed + i, posicion.c_str());
     i++;
-    cout<<"pos "<<posicion<<endl;
 
     write(SocketClient, parsed, i);
 }
@@ -121,7 +124,6 @@ void reading(int SocketClient){
                 break;
             }
         }
-        cout<<msg<<endl;
     }
     shutdown(SocketClient, SHUT_RDWR);
     close(SocketClient);

@@ -285,8 +285,8 @@ void handle_tcp_connection(int tcp_socket) {
                             break;
                         }
                     }
-                    std::cout << "ID Cliente: " << idCliente << std::endl;
-                    std::cout << "Mejor Jugada: " << bestMove << std::endl;
+                    std::cout << "Client's ID: " << idCliente << std::endl;
+                    std::cout << "Best move: " << bestMove << std::endl;
 
                     // enviar al Main la posicion
                     string parsed = "T" + idCliente + to_string(bestMove);

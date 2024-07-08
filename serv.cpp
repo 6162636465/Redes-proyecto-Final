@@ -216,10 +216,8 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                     // Juego | T ___ _ 
                     // T - idJugador de 3 bytes - posicion
                     if(client_socket == getMainServer()){
-                        cout<<message<<endl;
                         int id = std::stoi(message.substr(1, 3));
                         int posicion = std::stoi(message.substr(4, 1));
-                        cout<<posicion<<endl;
                         int player = getIdClientes(id);
                         char iaFicha = (tresEnRaya.ficha[player] == 'X')? 'O' : 'X';
                         tresEnRaya.movimiento(tresEnRaya.tablero[player], posicion, iaFicha);
@@ -235,10 +233,8 @@ void handle_tcp_client(int client_socket, std::string client_ip, int udp_socket)
                     }
                     // T posicion
                     else{
-                        int posicion = std::stoi(message.substr(1, 2));
-                        cout<<posicion<<endl;
+                        int posicion = std::stoi(message.substr(1, 2)) - 1;
                         int player = getTableroClientes(client_socket);
-                        cout<<player<<endl;
                         char iaFicha = (tresEnRaya.ficha[player] == 'X')? 'O' : 'X';
 
                         tresEnRaya.movimiento(tresEnRaya.tablero[player], posicion, tresEnRaya.ficha[player]);
@@ -459,10 +455,6 @@ void keep_alive_monitor() {
 }
 
 void notification(string conf, int sockCli){
-    string s_conf = to_string(conf.size()-1);
-
-    if(s_conf.size() == 1) s_conf = "0"+s_conf;
-    conf.insert(0, s_conf);
     write(sockCli, conf.c_str(), conf.length());
 }
 
