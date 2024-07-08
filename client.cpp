@@ -26,13 +26,13 @@ char turno;
 void imprimirTablero() {
     for (int i = 0; i < tablero.size(); ++i) {
         if(tablero[i] == '0'){
-            cout<<" "<<i<<" ";
+            cout<<" "<<i + 1<<" ";
         }
         else{
             cout<<" "<<tablero[i]<<" ";
         }
         if (i % 3 == 2) { 
-            if (i < tablero.size() - 1) {
+            if (i < tablero.size()) {
                 cout<<"\n-----------\n";
             }
         } else {
@@ -46,17 +46,21 @@ void continuarJuego(char parsed[255], int SocketClient){
     int indice = 0;
     string posicion;
 
+    
+    cout<<"Coloque la posicion de su ficha (1-9): "<<endl;
+    sleep(1.5);
     imprimirTablero();
 
     while(1){
         cout<<endl;
-        cout<<"Coloque la posicion de su ficha (1-9): "<<endl;
         getline(cin, posicion);
         
         indice = atoi(posicion.c_str()) - 1;
 
         if (indice >= 0 && indice < tablero.size() && tablero[indice] == '0') break;
         else cout<<"Posicion invalida o ya ocupada. Intente de nuevo."<<endl;
+        
+        cout<<"Coloque la posicion de su ficha (1-9): "<<endl;
     }    
 
     parsed[0] = 'T';    
@@ -76,7 +80,8 @@ void reading(int SocketClient){
 
     while(1){
         bzero(buff,255);
-        n = read(SocketClient, buff, 3);
+        n = read(SocketClient, buff, 255);
+        string msg(buff);
         if(n == 0) {
             printf("Disconnecting ...\n");
             shutdown(SocketClient, SHUT_RDWR);
@@ -89,23 +94,15 @@ void reading(int SocketClient){
             buff[n] = '\0';
             i++;
         }
-
-        switch (buff[0]){ 
+        switch (msg[0]){ 
             case 'T':{
-                read(SocketClient, buff, 1);
-                ficha = buff[0];
-                bzero(buff,255);
-
-                bzero(buff,255);
-                read(SocketClient, buff, 9);
-                tablero = buff;
-
-                bzero(buff,255);
-                read(SocketClient, buff, 1);
-                string ganador = buff;
+                ficha = msg[1];
+                tablero = msg.substr(2, 9);
+                string ganador = msg.substr(11, 1);
+                cout<<tablero<<endl;
+                cout<<ganador<<endl;
 
                 cout<<endl;
-                imprimirTablero();
                 if(ganador == "1"){
                     tablero.clear();
                     printf("[Server - Juego]: Ganaste! \n");
@@ -122,12 +119,10 @@ void reading(int SocketClient){
                     break;
                 }
             }
-            default:
-                bzero(buff,255);
-                int size_notification = atoi(buff+1);
-                read(SocketClient, buff, size_notification);
-                printf("\n[Server - Notificaciones]: [%s]\n", buff);
+            default:{
+                printf("\n[Server - Notificaciones]: [%s]\n", msg.c_str());
                 break;
+            }
         }
     }
     shutdown(SocketClient, SHUT_RDWR);
@@ -136,21 +131,16 @@ void reading(int SocketClient){
 
 void writing(int SocketClient){
     char parsed[255];
-    int i;
-    string name;
     string accion;
-    string msg;
     
     while(1){
         bzero(parsed,255);
-
         if(tablero.size() == 9){
             continuarJuego(parsed, SocketClient);
         }
         else{
             cout<<"Empezar juego? ";
             getline (cin,accion);
-
             // Cerrar programa
             if(accion == "end") {
                 shutdown(SocketClient, SHUT_RDWR);
@@ -159,7 +149,8 @@ void writing(int SocketClient){
                 return;
             }
             parsed[0] = 'J';
-            write(SocketClient, parsed, i);
+            tablero = "000000000";
+            write(SocketClient, parsed, 1);
         }        
     }
 }
@@ -178,7 +169,7 @@ int main(void){
     memset(&stSockAddr, 0, sizeof(struct sockaddr_in));
 
     stSockAddr.sin_family = AF_INET;
-    stSockAddr.sin_port = htons(50001);
+    stSockAddr.sin_port = htons(8080);
     Res = inet_pton(AF_INET, "127.0.0.1", &stSockAddr.sin_addr);
 
     string name, pass;

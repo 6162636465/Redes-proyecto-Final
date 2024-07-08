@@ -9,11 +9,7 @@ int main() {
     int tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in tcp_server_addr;
     tcp_server_addr.sin_family = AF_INET;
-    
-    //Serv ip:18.225.56.177
-    //Local ip:127.0.0.1
-    //___________________________________________________________________________
-    tcp_server_addr.sin_addr.s_addr = inet_addr("18.225.56.177");
+    tcp_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     tcp_server_addr.sin_port = htons(8080);
 
     connect(tcp_socket, (struct sockaddr *)&tcp_server_addr, sizeof(tcp_server_addr));
